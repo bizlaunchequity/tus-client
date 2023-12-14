@@ -1,0 +1,15 @@
+module Tus
+  class Client
+    VERSION: String
+    # See the writing guide of rbs: https://github.com/ruby/rbs#guides
+
+    def retries: (Integer) -> instance
+    def chink_size: (Integer) -> instance
+    def headers: (Hash[String | Symbol, String] ) -> instance
+    def metadata: (Hash[String | Symbol, String]) -> instance
+
+    def upload_by_path: (String) -> void
+    def upload_by_link: (String) { (Integer, Integer) -> void } -> void
+    def upload_by_io: (file_size: Integer, io: untyped) { (Integer, Integer) -> void } -> void
+  end
+end
