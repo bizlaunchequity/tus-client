@@ -75,7 +75,7 @@ module Tus
       upload_by_io(file_size:, io:, &)
     end
 
-    def upload_by_link(url, &)
+    def upload_by_link(url, &block)
       uri = URI.parse(url)
 
       Net::HTTP.start(uri.host, uri.port, use_ssl: uri.instance_of?(URI::HTTPS)) do |http|
@@ -88,14 +88,10 @@ module Tus
           current_offset, length = fetch_upload_state
           puts "current offset: #{current_offset}"
           puts "total bytes: #{length}"
-          acc = ""
 
           res.read_body do |chunk|
-            acc += chunk
-            current_offset = try_upload_chunk(current_offset, length, acc, &)
+            current_offset = upload_chunk(current_offset, length, chunk, &block)
           end
-
-          upload_chunk(current_offset, length, acc, &) if acc.length.positive?
         end
       end
     end
@@ -131,18 +127,6 @@ module Tus
       raise Error, "Cannot upload a stream of unknown size!" unless file_size.positive?
 
       file_size
-    end
-
-    def try_upload_chunk(current_offset, length, acc, &)
-      if acc.length >= @chunk_size
-        puts "current chunk size #{acc.length}"
-        ch = acc.slice!(0, @chunk_size)
-        current_offset = upload_chunk(current_offset, length, ch, &)
-
-        try_upload_chunk(current_offset, length, acc)
-      else
-        current_offset
-      end
     end
 
     def capabilities
