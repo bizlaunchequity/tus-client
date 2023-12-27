@@ -80,11 +80,14 @@ module Tus
 
       Net::HTTP.start(uri.host, uri.port, use_ssl: uri.instance_of?(URI::HTTPS)) do |http|
         file_size = fetch_file_size(uri, http)
+        puts "file size is #{file_size}"
 
         req = Net::HTTP::Get.new(uri)
         http.request(req) do |res|
           create_remote(file_size)
           current_offset, length = fetch_upload_state
+          puts "current offset: #{current_offset}"
+          puts "total bytes: #{length}"
           acc = ""
 
           res.read_body do |chunk|
@@ -97,7 +100,7 @@ module Tus
       end
     end
 
-    def upload_by_io(file_size:, io:, &)
+    def upload_by_io(file_size:, io:, &block)
       raise Error, "Cannot upload a stream of unknown size!" unless file_size
 
       create_remote(file_size)
@@ -109,7 +112,7 @@ module Tus
 
         current_offset =
           begin
-            upload_chunk(current_offset, length, chunk, &)
+            upload_chunk(current_offset, length, chunk, &block)
           rescue StandardError
             raise Error, "Broken upload! Cannot send a chunk!"
           end
@@ -132,6 +135,7 @@ module Tus
 
     def try_upload_chunk(current_offset, length, acc, &)
       if acc.length >= @chunk_size
+        puts "current chunk size #{acc.length}"
         ch = acc.slice!(0, @chunk_size)
         current_offset = upload_chunk(current_offset, length, ch, &)
 
@@ -168,6 +172,7 @@ module Tus
     end
 
     def upload_chunk(offset, length, chunk)
+      puts "upload chank: offset: #{offset}, total bytes: #{length}, chunk length: #{chunk.length}"
       headers = @headers.dup
       headers["Content-Type"] = "application/offset+octet-stream"
       headers["Upload-Offset"] = offset
