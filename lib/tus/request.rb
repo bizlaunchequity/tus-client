@@ -53,13 +53,13 @@ module Tus
       response
     end
 
-    def patch(headers, retries, chunk)
+    def patch(headers, retries, io)
       raise Error, "location path is not set" unless @location_path
 
       request = Net::HTTP::Patch.new(@location_path)
       headers.map { |header, value| request[header] = value }
 
-      request.body = chunk
+      request.body_stream = io
 
       response =
         retries.times.find do

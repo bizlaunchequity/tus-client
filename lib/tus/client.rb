@@ -5,6 +5,7 @@ require "base64"
 # require "uri"
 
 require_relative "client/version"
+require_relative "io"
 require_relative "error"
 require_relative "request"
 
@@ -15,11 +16,11 @@ module Tus
     TUS_VERSION = "1.0.0"
     NUM_RETRIES = 5
 
-    def initialize(url, chunk_size: CHUNK_SIZE, retries: NUM_RETRIES, metadata: {}, headers: {})
+    def initialize(url, retries: NUM_RETRIES, metadata: {}, headers: {})
       @request = Request.new(url)
+      @stats = []
 
       retries(retries)
-      chunk_size(chunk_size)
       metadata(metadata)
       headers(headers)
 
@@ -30,14 +31,6 @@ module Tus
       raise Error, "is not a valid retries" unless retries.instance_of?(Integer) && retries.positive?
 
       @retries = retries
-
-      self
-    end
-
-    def chunk_size(size)
-      raise Error, "is not a valid chunk size" unless size.instance_of?(Integer) && size.positive?
-
-      @chunk_size = size
 
       self
     end
@@ -71,8 +64,9 @@ module Tus
 
       file_size = File.size(file_path)
       io = File.open(file_path, "rb")
+      io = IO.new(io, file_size, &)
 
-      upload_by_io(file_size:, io:, &)
+      upload_by_io(file_size:, io:)
     end
 
     def upload_by_link(url, &block)
@@ -80,39 +74,37 @@ module Tus
 
       Net::HTTP.start(uri.host, uri.port, use_ssl: uri.instance_of?(URI::HTTPS)) do |http|
         file_size = fetch_file_size(uri, http)
-        puts "file size is #{file_size}"
+        read_io, write_io = ::IO.pipe
+        write_io.binmode
+        read_io.binmode
+        rd_io = Tus::IO.new(read_io, file_size, &block)
 
         req = Net::HTTP::Get.new(uri)
         http.request(req) do |res|
-          create_remote(file_size)
-          current_offset, length = fetch_upload_state
-          puts "current offset: #{current_offset}"
-          puts "total bytes: #{length}"
-
-          res.read_body do |chunk|
-            current_offset = upload_chunk(current_offset, length, chunk, &block)
+          Thread.new do
+            res.read_body(write_io)
+          ensure
+            write_io.close
+            Thread.current.exit
           end
+
+          upload_by_io(file_size:, io: rd_io)
         end
       end
     end
 
-    def upload_by_io(file_size:, io:, &block)
+    def upload_by_io(file_size:, io:)
       raise Error, "Cannot upload a stream of unknown size!" unless file_size
 
       create_remote(file_size)
       current_offset, length = fetch_upload_state
 
-      loop do
-        chunk = io.read(@chunk_size)
-        break unless chunk
-
-        current_offset =
-          begin
-            upload_chunk(current_offset, length, chunk, &block)
-          rescue StandardError
-            raise Error, "Broken upload! Cannot send a chunk!"
-          end
-      end
+      current_offset =
+        begin
+          upload(current_offset, length, io)
+        rescue StandardError
+          raise Error, "Broken upload!"
+        end
 
       raise Error, "Broken upload!" unless current_offset == length
     ensure
@@ -155,19 +147,17 @@ module Tus
       [response["Upload-Offset"], response["Upload-Length"]].map(&:to_i)
     end
 
-    def upload_chunk(offset, length, chunk)
-      puts "upload chank: offset: #{offset}, total bytes: #{length}, chunk length: #{chunk.length}"
+    def upload(offset, length, io)
       headers = @headers.dup
       headers["Content-Type"] = "application/offset+octet-stream"
       headers["Upload-Offset"] = offset
       headers["Tus-Resumable"] = TUS_VERSION
+      headers["Content-Length"] = length
 
-      response = @request.patch(headers, @retries, chunk)
+      response = @request.patch(headers, @retries, io)
 
       resulting_offset = response["Upload-Offset"].to_i
-      raise "Chunk upload is broken!" unless resulting_offset == offset + chunk.size
-
-      yield resulting_offset, length if block_given?
+      raise "Chunk upload is broken!" unless resulting_offset == length
 
       resulting_offset
     end
